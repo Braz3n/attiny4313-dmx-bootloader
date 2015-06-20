@@ -7,7 +7,7 @@ NUM_PAGE_BYTES = 64
 PAGE_ADDRESS_MASK = 0x3F
 PAGE_NUMBER_MASK = 0xFC0
 
-SERIAL_PORT = "None"
+SERIAL_PORT = "/dev/tty.usbserial-A603NK20"
 SERIAL_BAUD = 250000
 
 # Message Identifiers
@@ -64,24 +64,25 @@ def fillPageArray(hexFile, pageArray):
     return pageArray
 
 def sendPageMessage(port, pageNumber):
-    port.write(MESSAGE_PAGE_NUMBER)
-    port.write(pageNumber)
+    port.write(chr(MESSAGE_PAGE_NUMBER))
+    port.write(chr(pageNumber))
 
 def sendPageData(port, page):
-    sendPageMessage(page.pageNumber)
-    port.write(MESSAGE_DATA_START)
-    port.write(NUM_PAGE_BYTES)
+    sendPageMessage(port, page.pageNumber)
+    port.write(chr(MESSAGE_DATA_START))
+    port.write(chr(NUM_PAGE_BYTES))
     port.write(page.pageData)
 
 def uploadCode(pageArray):
-    port = Serial()
+    port = serial.Serial()
     port.port = SERIAL_PORT
     port.baud = SERIAL_BAUD
+    port.open()
     for page in pageArray:
         if not page.used:
             continue
         sendPageData(port, page)
-    page.write(MESSAGE_EOF)
+    port.write(chr(MESSAGE_EOF))
 
 def printCodeStats(pageArray, hexFile):
     lowPage = NUM_FLASH_PAGES
@@ -138,7 +139,7 @@ def main():
 
     # Upload the file.
     if args.p is not None:
-        SERIAL_PORT = args.p
+        SERIAL_PORT = "{0}".format(args.p)
         uploadCode(pageArray)
 
 
