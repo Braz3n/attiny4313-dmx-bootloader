@@ -26,6 +26,8 @@
 *.exe
 *.out
 *.app
+*.hex
+*.elf
 
 # OSX Files
 .DS_Store
