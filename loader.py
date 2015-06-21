@@ -98,9 +98,9 @@ def printCodeStats(pageArray, hexFile):
 
     for line in hexFile:
         hexLine = processHexLine(line)
-        if hexLine.address < lowAddress:
+        if hexLine.address < lowAddress and hexLine.record == 0x00:
             lowAddress = hexLine.address
-        elif (hexLine.address + hexLine.length - 1) > highAddress:
+        elif (hexLine.address + hexLine.length - 1) > highAddress and hexLine.record == 0x00:
             highAddress = hexLine.address + hexLine.length - 1
 
     dataLength = highAddress - lowAddress
