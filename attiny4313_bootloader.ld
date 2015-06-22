@@ -1,15 +1,18 @@
-/* Default linker script, for normal executables */
+/* Script for -n: mix text and data on same page */
+/* Copyright (C) 2014 Free Software Foundation, Inc.
+   Copying and distribution of this script, with or without modification,
+   are permitted in any medium without royalty provided the copyright
+   notice and this notice are preserved.  */
 OUTPUT_FORMAT("elf32-avr","elf32-avr","elf32-avr")
-OUTPUT_ARCH(avr:90)
+OUTPUT_ARCH(avr:25)
 MEMORY
 {
-  text   (rx)   : ORIGIN = 0x0, LENGTH = 4K
-  data   (rw!x) : ORIGIN = 0x0800040, LENGTH = 0x100
-  /* Provide offsets for config, lock and signature to match
-     production file format. Ignore offsets in datasheet.  */
-  config(rw!x)     : ORIGIN = 0x820000, LENGTH = 2
-  lock      (rw!x) : ORIGIN = 0x830000, LENGTH = 2
-  signature (rw!x) : ORIGIN = 0x840000, LENGTH = 4
+  text   (rx)   : ORIGIN = 0, LENGTH = 8K
+  data   (rw!x) : ORIGIN = 0x800060, LENGTH = 0xffa0
+  eeprom (rw!x) : ORIGIN = 0x810000, LENGTH = 64K
+  fuse      (rw!x) : ORIGIN = 0x820000, LENGTH = 1K
+  lock      (rw!x) : ORIGIN = 0x830000, LENGTH = 1K
+  signature (rw!x) : ORIGIN = 0x840000, LENGTH = 1K
 }
 SECTIONS
 {
@@ -20,7 +23,7 @@ SECTIONS
   .gnu.version   : { *(.gnu.version)	}
   .gnu.version_d   : { *(.gnu.version_d)	}
   .gnu.version_r   : { *(.gnu.version_r)	}
-  .rel.init      : { *(.rel.init)	}
+  .rel.init      : { *(.rel.init)		}
   .rela.init     : { *(.rela.init)	}
   .rel.text      :
     {
@@ -34,7 +37,7 @@ SECTIONS
       *(.rela.text.*)
       *(.rela.gnu.linkonce.t*)
     }
-  .rel.fini      : { *(.rel.fini)	}
+  .rel.fini      : { *(.rel.fini)		}
   .rela.fini     : { *(.rela.fini)	}
   .rel.rodata    :
     {
@@ -65,35 +68,35 @@ SECTIONS
   .rel.dtors     : { *(.rel.dtors)	}
   .rela.dtors    : { *(.rela.dtors)	}
   .rel.got       : { *(.rel.got)		}
-  .rela.got      : { *(.rela.got)	}
+  .rela.got      : { *(.rela.got)		}
   .rel.bss       : { *(.rel.bss)		}
-  .rela.bss      : { *(.rela.bss)	}
+  .rela.bss      : { *(.rela.bss)		}
   .rel.plt       : { *(.rel.plt)		}
-  .rela.plt      : { *(.rela.plt)	}
+  .rela.plt      : { *(.rela.plt)		}
   /* Internal text space or external memory.  */
-  .text   :  AT (0x0)
+  .text   :
   {
     *(.vectors)
     KEEP(*(.vectors))
     /* For data that needs to reside in the lower 64k of progmem.  */
-    *(.progmem.gcc*)
+     *(.progmem.gcc*)
     /* PR 13812: Placing the trampolines here gives a better chance
        that they will be in range of the code that uses them.  */
     . = ALIGN(2);
      __trampolines_start = . ;
     /* The jump trampolines for the 16-bit limited relocs will reside here.  */
     *(.trampolines)
-    *(.trampolines*)
+     *(.trampolines*)
      __trampolines_end = . ;
-    *(.progmem*)
+     *(.progmem*)
     . = ALIGN(2);
     /* For future tablejump instruction arrays for 3 byte pc devices.
        We don't relax jump/call instructions within these sections.  */
     *(.jumptables)
-    *(.jumptables*)
+     *(.jumptables*)
     /* For code that needs to reside in the lower 128k progmem.  */
     *(.lowtext)
-    *(.lowtext*)
+     *(.lowtext*)
      __ctors_start = . ;
      *(.ctors)
      __ctors_end = . ;
@@ -126,7 +129,7 @@ SECTIONS
     KEEP (*(.init9))
     *(.text)
     . = ALIGN(2);
-    *(.text.*)
+     *(.text.*)
     . = ALIGN(2);
     *(.fini9)  /* _exit() starts here.  */
     KEEP (*(.fini9))
@@ -154,20 +157,19 @@ SECTIONS
   {
      PROVIDE (__data_start = .) ;
     *(.data)
-    KEEP (*(.data))
-    *(.data*)
+     *(.data*)
     *(.rodata)  /* We need to include .rodata here if gcc is used */
-    *(.rodata*) /* with -fdata-sections.  */
+     *(.rodata*) /* with -fdata-sections.  */
     *(.gnu.linkonce.d*)
     . = ALIGN(2);
      _edata = . ;
      PROVIDE (__data_end = .) ;
   }  > data AT> text
-  .bss   : AT (ADDR (.bss))
+  .bss  ADDR(.data) + SIZEOF (.data)   : AT (ADDR (.bss))
   {
      PROVIDE (__bss_start = .) ;
     *(.bss)
-    *(.bss*)
+     *(.bss*)
     *(COMMON)
      PROVIDE (__bss_end = .) ;
   }  > data
@@ -182,6 +184,19 @@ SECTIONS
      _end = . ;
      PROVIDE (__heap_start = .) ;
   }  > data
+  .eeprom  :
+  {
+    /* See .data above...  */
+    KEEP(*(.eeprom*))
+     __eeprom_end = . ;
+  }  > eeprom
+  .fuse  :
+  {
+    KEEP(*(.fuse))
+    KEEP(*(.lfuse))
+    KEEP(*(.hfuse))
+    KEEP(*(.efuse))
+  }  > fuse
   .lock  :
   {
     KEEP(*(.lock*))
@@ -190,10 +205,6 @@ SECTIONS
   {
     KEEP(*(.signature*))
   }  > signature
-  .config  :
-  {
-    KEEP(*(.config*))
-  }  > config
   /* Stabs debugging sections.  */
   .stab 0 : { *(.stab) }
   .stabstr 0 : { *(.stabstr) }
@@ -202,6 +213,7 @@ SECTIONS
   .stab.index 0 : { *(.stab.index) }
   .stab.indexstr 0 : { *(.stab.indexstr) }
   .comment 0 : { *(.comment) }
+  .note.gnu.build-id : { *(.note.gnu.build-id) }
   /* DWARF debug sections.
      Symbols in the DWARF debugging sections are relative to the beginning
      of the section so we begin them at 0.  */
@@ -215,11 +227,21 @@ SECTIONS
   .debug_aranges  0 : { *(.debug_aranges) }
   .debug_pubnames 0 : { *(.debug_pubnames) }
   /* DWARF 2 */
-  .debug_info     0 : { *(.debug_info) *(.gnu.linkonce.wi.*) }
+  .debug_info     0 : { *(.debug_info .gnu.linkonce.wi.*) }
   .debug_abbrev   0 : { *(.debug_abbrev) }
-  .debug_line     0 : { *(.debug_line) }
+  .debug_line     0 : { *(.debug_line .debug_line.* .debug_line_end ) }
   .debug_frame    0 : { *(.debug_frame) }
   .debug_str      0 : { *(.debug_str) }
   .debug_loc      0 : { *(.debug_loc) }
   .debug_macinfo  0 : { *(.debug_macinfo) }
+  /* SGI/MIPS DWARF 2 extensions */
+  .debug_weaknames 0 : { *(.debug_weaknames) }
+  .debug_funcnames 0 : { *(.debug_funcnames) }
+  .debug_typenames 0 : { *(.debug_typenames) }
+  .debug_varnames  0 : { *(.debug_varnames) }
+  /* DWARF 3 */
+  .debug_pubtypes 0 : { *(.debug_pubtypes) }
+  .debug_ranges   0 : { *(.debug_ranges) }
+  /* DWARF Extension.  */
+  .debug_macro    0 : { *(.debug_macro) }
 }

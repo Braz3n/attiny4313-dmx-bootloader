@@ -20,7 +20,7 @@
 DEVICE     = attiny4313
 CLOCK      = 16000000
 PROGRAMMER = #-c stk500v2 -P avrdoper
-OBJECTS    = main.o DmxSlave.o
+OBJECTS    = main.o
 FUSES      = -U hfuse:w:0xde:m -U lfuse:w:0xff:m -U efuse:w:0xfe:m
 
 # ATMega8 fuse bits used above (fuse bits for other devices are different!):
@@ -49,7 +49,7 @@ FUSES      = -U hfuse:w:0xde:m -U lfuse:w:0xff:m -U efuse:w:0xfe:m
 # Tune the lines below only if you know what you are doing:
 
 AVRDUDE = avrdude $(PROGRAMMER) -p $(DEVICE)
-COMPILE = avr-gcc -Wall -Os -std=c11 -DF_CPU=$(CLOCK) -mmcu=$(DEVICE) -T ./attiny4313_bootloader.ld
+COMPILE = avr-gcc -Wall -Os -std=gnu11 -DF_CPU=$(CLOCK) -mmcu=$(DEVICE) -T ./attiny4313_bootloader.ld
 
 # symbolic targets:
 all:	main.hex
