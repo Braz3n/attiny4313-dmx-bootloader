@@ -33,7 +33,7 @@
 // For a 16MHz clock, use 0x00 and 0x03.
 // For a 8MHz clock, use 0x00 and 0x01.
 #define DMX_BAUD_DIVIDER_HIGH   0x00
-#define DMX_BAUD_DIVIDER_LOW    0x03
+#define DMX_BAUD_DIVIDER_LOW    0x01
 
 #define PAGE_BUFFER_LENGTH 64
 
@@ -77,6 +77,7 @@ uint8_t activeBuffer = 0;
 // and should boot to application. Otherwise, the next byte
 // will be the beginning of a new message.
 
+void bootloaderReset(void);
 void bootApplication(void);
 void writeZReg(uint16_t data);
 void pageBufferErase();
@@ -169,18 +170,14 @@ void processBuffer(void) {
 void bootApplication(void) {
 	// Make sure the last buffer has been processed.
 	processBuffer();
+	bootloaderReset();
 	writeZReg(APPLICATION_BOOT_ADDRESS);
 	asm("ijmp"::);
 }
 
 void writeZReg(uint16_t data) {
-	#warning Needs testing. Might require address of variable instead.
-	//uint8_t lowByte = data & 0x00FF;
-	//uint8_t highByte = data & 0xFF00;
-	//asm("lds r30, %0"::"r"(lowByte):"r30");
-	//asm("lds r31, %0"::"r"(highByte):"r31");
 	*(uint8_t*)0x1E = data & 0x00FF;
-	*(uint8_t*)0x1F = data & 0xFF00;
+	*(uint8_t*)0x1F = (data & 0xFF00) >> 8;
 }
 
 void pageBufferErase() {
@@ -190,14 +187,14 @@ void pageBufferErase() {
 
 void pageBufferWrite(uint16_t data, uint16_t address) {
 	writeZReg(address);
-	#warning Needs testing. Might require address of variable instead.
-	//uint8_t lowByte = data & 0x00FF;
-	//uint8_t highByte = data & 0xFF00;
-	//asm("lds r0, %0"::"r"(&lowByte):"r0");
-	//asm("lds r1, %0"::"r"(&highByte):"r1");
+	// Load the data word into R1:R0.
+	// We can't load the data directly into R0 since the address 0x00 is considered writing into NULL.
+	// Instead we load the address into R1 and use the MOV instruction to shift it to R0.
 	*(uint8_t*)0x01 = data & 0x00FF;
 	asm("mov r0, r1"::);
-	*(uint8_t*)0x01 = data & 0xFF00;
+	*(uint8_t*)0x01 = (data & 0xFF00) >> 8;
+	SPMCSR = 0x01;
+	asm("spm"::);
 }
 
 void pageErase(uint16_t pageNumber) {
