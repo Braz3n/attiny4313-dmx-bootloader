@@ -14,6 +14,9 @@
 #include <avr/eeprom.h>
 #include <string.h>
 
+// Application Start Address.
+#define APPLICATION_BOOT_ADDRESS 0x400
+
 // PWM Pin Definitions.
 #define RGB_PORT    PORTD
 #define RGB_DDR     DDRD
@@ -88,7 +91,7 @@ ISR(USART0_RX_vect) {
 	static uint8_t expectedBytes = 0;
 	uint8_t statusByte = UCSRA;
 	char latestData = UDR;
-	
+
 	// Detected a break character. Boot application.
 	if (statusByte & (1 << 4)) {
 		breakReceived = 1;
@@ -102,7 +105,7 @@ ISR(USART0_RX_vect) {
 		breakReceived = 0;
 		return;
 	}
-	
+
 	switch (currentMessage) {
 		case (NONE):
 			bufferIndex = 0;
@@ -144,17 +147,17 @@ ISR(USART0_RX_vect) {
 void processBuffer(void) {
 	static uint8_t lastProcessed = 1;
 	uint16_t dataWord;
-	
+
 	// Check if we have a new buffer to process.
 	// Currently assuming we process data faster than receive it.
 	if (activeBuffer != lastProcessed) {
 		return;
 	}
-	
+
 	uint8_t inactiveBuffer = activeBuffer ^ 0x01;
-	
+
 	uint16_t address = messageBuffer[inactiveBuffer].pageNumber << 5;
-	
+
 	for (uint8_t i=0; i < messageBuffer[inactiveBuffer].length; i+=2) {
 		dataWord = (uint16_t)messageBuffer[inactiveBuffer].data[i+1] << 8;
 		dataWord += messageBuffer[inactiveBuffer].data[i];
@@ -164,7 +167,10 @@ void processBuffer(void) {
 }
 
 void bootApplication(void) {
-	// Needs to make sure that all of the buffers have been successfully processed.
+	// Make sure the last buffer has been processed.
+	processBuffer();
+	writeZReg(APPLICATION_BOOT_ADDRESS);
+	asm("ijmp"::);
 }
 
 void writeZReg(uint16_t data) {
@@ -196,7 +202,7 @@ void pageBufferWrite(uint16_t data, uint16_t address) {
 
 void pageErase(uint16_t pageNumber) {
 	// Shifted by six so it occupies the PCPAGE field.
-	writeZReg(pageNumber << 6);  
+	writeZReg(pageNumber << 6);
 	SPMCSR = 0x03;
 	asm("spm"::);
 }
@@ -219,7 +225,7 @@ void bootloaderInit(void) {
 	UCSRC = (0x01 << 3) | (0x03 << 1);
 	// Enable the Rx Complete Interrupt and the UART Receiver.
 	UCSRB = (1 << 7) | (1 << 4);
-	
+
 	// Globally enable interrupts.
 	sei();
 }
@@ -230,7 +236,7 @@ void bootloaderReset(void) {
 		UBRRL = 0x00;
 		UCSRC = 0x06;
 		UCSRB = 0x00;
-		
+
 		// Globally disable interrupts.
 		cli();
 }
@@ -239,6 +245,6 @@ int main() {
 	while (1) {
 		processBuffer();
 	}
-	
+
 	return 0;
 }
