@@ -1,13 +1,17 @@
 import argparse
 import serial
 
+# Lowest flash page that can be programmed. Used to protect the bootloader from
+# accidental overwriting.
+MIN_FLASH_PAGE = 10
+
 NUM_FLASH_PAGES = 64
 NUM_PAGE_BYTES = 64
 
 PAGE_ADDRESS_MASK = 0x3F
 PAGE_NUMBER_MASK = 0xFC0
 
-SERIAL_PORT = "/dev/tty.usbserial-A603NK20"
+SERIAL_PORT = "/dev/cu.usbmodem1421"
 SERIAL_BAUD = 250000
 
 # Message Identifiers
@@ -55,6 +59,9 @@ def processHexLine(line):
 def fillPageArray(hexFile, pageArray):
     for line in hexFile:
         hexLine = processHexLine(line)
+        if hexLine.record != 0x00:
+            # Not a data message. Ignore this line.
+            continue
         pageNumber = (hexLine.address >> 6) & PAGE_ADDRESS_MASK
         pageAddress = hexLine.address & PAGE_ADDRESS_MASK
         for i in xrange(0, len(hexLine.data)):
@@ -71,7 +78,8 @@ def sendPageData(port, page):
     sendPageMessage(port, page.pageNumber)
     port.write(chr(MESSAGE_DATA_START))
     port.write(chr(NUM_PAGE_BYTES))
-    port.write(page.pageData)
+    for c in page.pageData:
+        port.write(chr(c))
 
 def uploadCode(pageArray):
     port = serial.Serial()
@@ -79,7 +87,7 @@ def uploadCode(pageArray):
     port.baud = SERIAL_BAUD
     port.open()
     for page in pageArray:
-        if not page.used:
+        if not page.used or page.pageNumber < MIN_FLASH_PAGE:
             continue
         sendPageData(port, page)
     port.write(chr(MESSAGE_EOF))
@@ -111,7 +119,7 @@ def printCodeStats(pageArray, hexFile):
 
 def main():
     parser = argparse.ArgumentParser(description='Loader script for a custom bootloader on the ATtiny4313.')
-    parser.add_argument('-p', nargs='?', required=False, help="The serial port to upload the file over.")
+    parser.add_argument('-p', nargs='1', required=True, help="The serial port to upload the file over.")
     parser.add_argument('-f', nargs=1, required=True, help="The hex file to be uploaded.")
     parser.add_argument('-v', nargs='?', const=True, required=False, help="Print information about the hex file to the terminal.")
     parser.add_argument('-d', nargs='?', const=True, required=False, help="Print hex bytes to the terminal.")
