@@ -1,155 +1,70 @@
-import argparse
+from intelhex import IntelHex
+from crc16 import crc16xmodem
+from time import sleep
 import serial
+import array
 
-# Lowest flash page that can be programmed. Used to protect the bootloader from
-# accidental overwriting.
-MIN_FLASH_PAGE = 10
+PAGE_COUNT = 64
+PAGE_BYTES = 64
 
-NUM_FLASH_PAGES = 64
-NUM_PAGE_BYTES = 64
+class BootloaderMessage(object):
+    def __init__(self, page_number, payload_length, payload):
+        if type(page_number) is not int:
+            raise TypeError("Page Number is not an integer type.")
+        if type(payload_length) is not int:
+            raise TypeError("Payload Length is not an integer type.")
+        if payload is None:
+            pass
+        elif type(payload) is not bytearray and type(payload) is not array.array:
+            print type(payload)
+            raise TypeError("Payload is not a bytearray or array type.")
 
-PAGE_ADDRESS_MASK = 0x3F
-PAGE_NUMBER_MASK = 0xFC0
+        self.page_number = page_number
+        self.payload_length = payload_length
+        self.payload = payload
+        self.checksum = self._calculate_checksum()
 
-SERIAL_PORT = "/dev/cu.usbmodem1421"
-SERIAL_BAUD = 250000
+    def _calculate_checksum(self):
+        checksum = crc16xmodem(chr(self.page_number))
+        checksum = crc16xmodem(chr(self.payload_length), checksum)
+        if self.payload is not None:
+            for char in self.payload:
+                checksum = crc16xmodem(chr(char), checksum)
+        return checksum
 
-# Message Identifiers
-MESSAGE_DATA_START = 0x01
-MESSAGE_PAGE_NUMBER = 0x03
-MESSAGE_EOF = 0xFF
+    def transmit_message(self, port):
+        # Preamble
+        port.write(chr(0xAA))
+        # Page Number
+        port.write(chr(self.page_number))
+        # Payload Length
+        port.write(chr(self.payload_length))
+        # Payload
+        if self.payload is not None:
+            for char in self.payload:
+                port.write(chr(char))
+                sleep(0.01)
+        # Checksum
+        port.write(chr(self.checksum & 0xFF))
+        port.write(chr((self.checksum & 0xFF00) >> 8))
 
-# This is the first page of the flash memory that can be used by the program
-# code. The earlier pages are occupied by the bootloader, and thus are protected.
-PROGRAM_START_PAGE = 32
+def transmit_hex_file(hex_file, serial_port):
+    MIN_PAGE = hex_file.minaddr() / PAGE_BYTES
+    MAX_PAGE = hex_file.maxaddr() / PAGE_BYTES
 
-class HexLine(object):
-    def __init__(self, length, address, record, data, checksum):
-        self.length = length
-        self.address = address
-        self.record = record
-        self.data = data
-        self.checksum = checksum
+    for page_number in xrange(MIN_PAGE, MAX_PAGE + 1):
+        page_address = page_number * PAGE_BYTES
+        page_message = BootloaderMessage(page_number, PAGE_BYTES, hex_file.tobinarray(start=page_address, size=PAGE_BYTES))
+        page_message.transmit_message(serial_port)
+        sleep(1)
 
-class Page(object):
-    def __init__(self, pageNumber):
-        self.pageNumber = pageNumber
-        self.pageData = bytearray([])
-        self.used = False
-        for i in xrange(0, NUM_PAGE_BYTES):
-            self.pageData.append(0x00)
-
-    def __str__(self):
-        output = ""
-        for i in xrange(0, NUM_PAGE_BYTES):
-            output += "{0:02X} ".format(self.pageData[i])
-        return output
-
-def processHexLine(line):
-    line = line.strip()  # Remove the newline character at the end of each line.
-    length = int(line[1:3], 16)
-    address = int(line[3:7], 16)  # Address is always big endian.
-    record = int(line[7:9], 16)
-    dataString = line[9:-2]
-    checksum = int(line[-2:], 16)
-    dataArray = bytearray.fromhex(dataString)
-
-    return HexLine(length, address, record, dataArray, checksum)
-
-def fillPageArray(hexFile, pageArray):
-    for line in hexFile:
-        hexLine = processHexLine(line)
-        if hexLine.record != 0x00:
-            # Not a data message. Ignore this line.
-            continue
-        pageNumber = (hexLine.address >> 6) & PAGE_ADDRESS_MASK
-        pageAddress = hexLine.address & PAGE_ADDRESS_MASK
-        for i in xrange(0, len(hexLine.data)):
-            pageArray[pageNumber].pageData[i + pageAddress] = hexLine.data[i]
-            pageArray[pageNumber].used = True
-
-    return pageArray
-
-def sendPageMessage(port, pageNumber):
-    port.write(chr(MESSAGE_PAGE_NUMBER))
-    port.write(chr(pageNumber))
-
-def sendPageData(port, page):
-    sendPageMessage(port, page.pageNumber)
-    port.write(chr(MESSAGE_DATA_START))
-    port.write(chr(NUM_PAGE_BYTES))
-    for c in page.pageData:
-        port.write(chr(c))
-
-def uploadCode(pageArray):
-    port = serial.Serial()
-    port.port = SERIAL_PORT
-    port.baud = SERIAL_BAUD
-    port.open()
-    for page in pageArray:
-        if not page.used or page.pageNumber < MIN_FLASH_PAGE:
-            continue
-        sendPageData(port, page)
-    port.write(chr(MESSAGE_EOF))
-
-def printCodeStats(pageArray, hexFile):
-    lowPage = NUM_FLASH_PAGES
-    highPage = 0
-    lowAddress = NUM_FLASH_PAGES * NUM_PAGE_BYTES
-    highAddress = 0
-
-    for page in pageArray:
-        if page.pageNumber < lowPage:
-            lowPage = page.pageNumber
-        if page.pageNumber > highPage:
-            highPage = page.pageNumber
-
-    for line in hexFile:
-        hexLine = processHexLine(line)
-        if hexLine.address < lowAddress and hexLine.record == 0x00:
-            lowAddress = hexLine.address
-        elif (hexLine.address + hexLine.length - 1) > highAddress and hexLine.record == 0x00:
-            highAddress = hexLine.address + hexLine.length - 1
-
-    dataLength = highAddress - lowAddress
-
-    print "Low Address: 0x{0:X}".format(lowAddress)
-    print "High Address: 0x{0:X}".format(highAddress)
-    print "Total Space Occupied: {0} bytes".format(dataLength)
+    page_message = BootloaderMessage(MAX_PAGE+1, 0, None)
+    page_message.transmit_message(serial_port)
 
 def main():
-    parser = argparse.ArgumentParser(description='Loader script for a custom bootloader on the ATtiny4313.')
-    parser.add_argument('-p', nargs='1', required=True, help="The serial port to upload the file over.")
-    parser.add_argument('-f', nargs=1, required=True, help="The hex file to be uploaded.")
-    parser.add_argument('-v', nargs='?', const=True, required=False, help="Print information about the hex file to the terminal.")
-    parser.add_argument('-d', nargs='?', const=True, required=False, help="Print hex bytes to the terminal.")
-
-    args = parser.parse_args()
-    hexFileName = args.f[0]
-
-    with open(hexFileName, 'r') as openedHexFile:
-        hexFile = openedHexFile.readlines()
-
-    pageArray = []
-    for i in xrange(NUM_FLASH_PAGES):
-        pageArray.append(Page(i))
-
-    fillPageArray(hexFile, pageArray)
-
-    # Print out the Hex Data.
-    if args.d is not None:
-        for i in xrange(NUM_FLASH_PAGES):
-            print pageArray[i]
-
-    # Print out size data for the Hex File.
-    if args.v is not None:
-        printCodeStats(pageArray, hexFile)
-
-    # Upload the file.
-    if args.p is not None:
-        SERIAL_PORT = "{0}".format(args.p)
-        uploadCode(pageArray)
-
+    serial_port = serial.Serial("COM5", 250000, stopbits=serial.STOPBITS_TWO)
+    hex_file = IntelHex("dmxSlave.hex")
+    transmit_hex_file(hex_file, serial_port)
 
 if __name__ == "__main__":
     main()

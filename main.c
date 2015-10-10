@@ -1,247 +1,222 @@
 /*
- *  main.c
- *  Zane Barker
- *  1/6/2015
- *  A simple DMX bootloader for an LED stage light using the ATtiny4313.
- *
+ * main.c
+ * Zane Barker
+ * 28/08/2015
+ * A simple DMX bootloader for an LED stage light running on the ATtiny4313.
  */
 
-
-#include <avr/io.h>
 #include <stdlib.h>
 #include <string.h>
-#include <avr/interrupt.h>
 #include <avr/eeprom.h>
-#include <string.h>
+#include <avr/interrupt.h>
+#include <avr/io.h>
+#include <util/crc16.h>
+#include <stdio.h>
+
+// Convenience macros for fixed-length integers.
+#define u8  uint8_t
+#define u16 uint16_t
+#define u32 uint32_t
+#define s8  int8_t
+#define s16 int16_t
+#define s32 int32_t
+
+// Assembly Subroutine Definitions.
+extern void pageBufferWrite(u16 data, u16 address);
+extern void pageBufferErase(void);
+extern void pageWrite(u16 pageAddress);
+extern void pageErase(u16 pageAddress);
+extern void jumpToApplication(u16 applicationAddress);
 
 // Application Start Address.
-#define APPLICATION_BOOT_ADDRESS 0x400
+#define APPLICATION_BOOT_ADDRESS  0x400
+#define APPLICATION_START_PAGE    0x10
 
-// PWM Pin Definitions.
-#define RGB_PORT    PORTD
-#define RGB_DDR     DDRD
-#define RGB_PIN     PIND
-#define R_PWM_PIN   2
-#define G_PWM_PIN   3
-#define B_PWM_PIN   4
-// 0x01 - DIV1
-// 0x02 - DIV8
-// 0x03 - DIV64
-// 0x04 - DIV256
-// 0x05 - DIV1024
-#define TIMER_PRESCALE 0x01
+// UART Configuration.
+// 250000 Baud
 // For a 16MHz clock, use 0x00 and 0x03.
-// For a 8MHz clock, use 0x00 and 0x01.
+// For an 8MHz clock, use 0x00 and 0x01.
 #define DMX_BAUD_DIVIDER_HIGH   0x00
 #define DMX_BAUD_DIVIDER_LOW    0x01
 
-#define PAGE_BUFFER_LENGTH 64
-
-typedef struct {
-	uint16_t address;
-	uint8_t dataBytesRemaining;
-} UartState;
-
-typedef struct {
-	uint16_t pageNumber;
-	char data[PAGE_BUFFER_LENGTH];
-	uint8_t length;
-} DataPacket;
+#define MESSAGE_PREAMBLE 0xAA
+#define PAGE_BUFFER_LENGTH  64
 
 typedef enum {
-	NONE = 0x00,
-	DATA_START = 0x01,
-	DATA_BYTES = 0x02,
-	PAGE_NUM = 0x03,
-	EOF = 0x80
-} messageType;
-
-// Double Buffering Messages
-DataPacket messageBuffer[2];
-uint8_t activeBuffer = 0;
+  PREAMBLE,
+  PAGE_NUMBER,
+  PAYLOAD_LENGTH,
+  PAYLOAD_DATA,
+  CHECKSUM
+} isr_state_t;
 
 // MESSAGE FORMAT
-// 0x01 - DATA_START (Followed by one byte)
-// Data messages have a single byte which indicates how many bytes
-// follow. These bytes fill a continuous space in memory.
-// 0x02 - DATA_BYTES
-// This message is never actually transmitted, but rather used as
-// a "state" that the bootloader occupies.
-// 0x03 - PAGE_NUM (Followed by one byte)
-// Number of the memory page to address.
-// 0xFF - EOF (No following bytes)
-// Indicates that the file is complete and there is nothing left
-// to be written to memory.
-// BREAK CHARACTER (Followed by one byte)
-// If followed by a zero byte, the light is receiving DMX packets
-// and should boot to application. Otherwise, the next byte
-// will be the beginning of a new message.
+// Preamble - One Byte (Always 0xAA)
+// Page Number - One Byte
+// Payload Length - One Byte
+// Payload Data - One Byte * Payload Length
+// Checksum - Two Bytes
+//    _crc_ccitt_update() from <util/crc16.h>
+// For all data sections, the data is transmitted in Little Endian Order
+// A message with zero length indicates the end of the application data.
 
-void bootloaderReset(void);
-void bootApplication(void);
-void writeZReg(uint16_t data);
-void pageBufferErase();
-void pageBufferWrite(uint16_t data, uint16_t address);
-void pageErase(uint16_t pageNumber);
-void pageWrite(uint16_t pageNumber);
+typedef struct {
+  u8 page_number;
+  u8 payload_length;
+  u8 data[PAGE_BUFFER_LENGTH];
+  u16 checksum;
+  u8 message_valid;
+} message_buffer_t;
+
+message_buffer_t received_buffer;
+u8 boot_application_flag = 0;
 
 ISR(USART0_RX_vect) {
-	static uint8_t bufferIndex = 0;
-	static uint8_t breakReceived = 0;
-	static messageType currentMessage = NONE;
-	static uint8_t expectedBytes = 0;
-	uint8_t statusByte = UCSRA;
-	char latestData = UDR;
+  static isr_state_t isr_state = PREAMBLE;
+  static u8 bytes_received = 0;
+  u8 status_register = UCSRA;
+  u8 latest_data = UDR;
+  // Detected a break character. Boot application.
+  if (status_register & (1 << 4)) {
+    boot_application_flag = 1;
+  }
 
-	// Detected a break character. Boot application.
-	if (statusByte & (1 << 4)) {
-		breakReceived = 1;
-	}
-	else if (breakReceived && latestData == 0x00) {
-		// Receiving DMX messages. Boot to application.
-		bootApplication();
-	}
-	else if (breakReceived) {
-		// Synchronization for new messages.
-		breakReceived = 0;
-		return;
-	}
-
-	switch (currentMessage) {
-		case (NONE):
-			bufferIndex = 0;
-			switch (latestData) {
-				case (char)DATA_START:
-					expectedBytes = 1;
-					break;
-				case (char)PAGE_NUM:
-					expectedBytes = 1;
-					break;
-				case (char)EOF:
-					break;
-			}
-			break;
-		case (DATA_START):
-			expectedBytes = latestData;
-			currentMessage = DATA_BYTES;
-			break;
-		case (DATA_BYTES):
-			messageBuffer[activeBuffer].data[bufferIndex] = latestData;
-			bufferIndex++;
-			expectedBytes--;
-			if (expectedBytes == 0) {
-				messageBuffer[activeBuffer].length = bufferIndex;
-				currentMessage = NONE;
-				activeBuffer ^= 0x01;
-			}
-			break;
-		case (PAGE_NUM):
-			messageBuffer[activeBuffer].pageNumber = latestData;
-			currentMessage = NONE;
-			break;
-		case (EOF):
-			bootApplication();
-			break;
-	}
-}
-
-void processBuffer(void) {
-	static uint8_t lastProcessed = 1;
-	uint16_t dataWord;
-
-	// Check if we have a new buffer to process.
-	// Currently assuming we process data faster than receive it.
-	if (activeBuffer != lastProcessed) {
-		return;
-	}
-
-	uint8_t inactiveBuffer = activeBuffer ^ 0x01;
-
-	uint16_t address = messageBuffer[inactiveBuffer].pageNumber << 5;
-
-	for (uint8_t i=0; i < messageBuffer[inactiveBuffer].length; i+=2) {
-		dataWord = (uint16_t)messageBuffer[inactiveBuffer].data[i+1] << 8;
-		dataWord += messageBuffer[inactiveBuffer].data[i];
-		pageBufferWrite(dataWord, address + i);
-	}
-	pageBufferErase();
-}
-
-void bootApplication(void) {
-	// Make sure the last buffer has been processed.
-	processBuffer();
-	bootloaderReset();
-	writeZReg(APPLICATION_BOOT_ADDRESS);
-	asm("ijmp"::);
-}
-
-void writeZReg(uint16_t data) {
-	*(uint8_t*)0x1E = data & 0x00FF;
-	*(uint8_t*)0x1F = (data & 0xFF00) >> 8;
-}
-
-void pageBufferErase() {
-	SPMCSR = 0x11;
-	asm("spm"::);
-}
-
-void pageBufferWrite(uint16_t data, uint16_t address) {
-	writeZReg(address);
-	// Load the data word into R1:R0.
-	// We can't load the data directly into R0 since the address 0x00 is considered writing into NULL.
-	// Instead we load the address into R1 and use the MOV instruction to shift it to R0.
-	*(uint8_t*)0x01 = data & 0x00FF;
-	asm("mov r0, r1"::);
-	*(uint8_t*)0x01 = (data & 0xFF00) >> 8;
-	SPMCSR = 0x01;
-	asm("spm"::);
-}
-
-void pageErase(uint16_t pageNumber) {
-	// Shifted by six so it occupies the PCPAGE field.
-	writeZReg(pageNumber << 6);
-	SPMCSR = 0x03;
-	asm("spm"::);
-}
-
-void pageWrite(uint16_t pageNumber) {
-	// Shifted by six so it occupies the PCPAGE field.
-	writeZReg(pageNumber << 6);
-	SPMCSR = 0x05;
-	asm("spm"::);
+  switch (isr_state) {
+    case (PREAMBLE):
+      if (latest_data == MESSAGE_PREAMBLE) {
+        isr_state = PAGE_NUMBER;
+      }
+      break;
+    case (PAGE_NUMBER):
+      received_buffer.page_number = latest_data;
+      isr_state = PAYLOAD_LENGTH;
+      break;
+    case (PAYLOAD_LENGTH):
+      received_buffer.payload_length = latest_data;
+      if (latest_data == 0) {
+        isr_state = CHECKSUM;
+      }
+      else {
+        isr_state = PAYLOAD_DATA;
+      }
+      break;
+    case (PAYLOAD_DATA):
+      received_buffer.data[bytes_received] = latest_data;
+      bytes_received++;
+      if (bytes_received == received_buffer.payload_length || bytes_received == PAGE_BUFFER_LENGTH) {
+        // Move to the next state if "payload_length" bytes are received or the buffer is filled.
+        // Note that in the second case, the whole message is unlikely to be valid.
+        bytes_received = 0;
+        isr_state = CHECKSUM;
+      }
+	  break;
+    case (CHECKSUM):
+      if (bytes_received == 0) {
+        received_buffer.checksum = (u16)latest_data;
+        bytes_received = 1;
+      }
+      else {
+        received_buffer.checksum += ((u16)latest_data << 8);
+        received_buffer.message_valid = 1;
+        bytes_received = 0;
+        isr_state = PREAMBLE;
+      }
+	  break;
+  }
 }
 
 void bootloaderInit(void) {
-	// Configure the UART Controller.
-	// Set the UART Baud Rate.
-	// Baud Rate = 250000.
-	UBRRH = DMX_BAUD_DIVIDER_HIGH;
-	UBRRL = DMX_BAUD_DIVIDER_LOW;
-	// Set the UART Frame Format.
-	// 8N2 UART.
-	UCSRC = (0x01 << 3) | (0x03 << 1);
-	// Enable the Rx Complete Interrupt and the UART Receiver.
-	UCSRB = (1 << 7) | (1 << 4);
+  // Configure the UART Controller.
+  // Set the baud rate to 250000 baud.
+  UBRRH = DMX_BAUD_DIVIDER_HIGH;
+  UBRRL = DMX_BAUD_DIVIDER_LOW;
+  // Set the UART frame format to 8N2.
+  UCSRC = (1 << USBS) | (1 << UCSZ0) | (1 << UCSZ1);
+  // Enable the Rx Complete Interrupt, UART Receiver and UART Transmitter.
+  UCSRB = (1 << RXCIE) | (1 << RXEN) | (1 << TXEN);
 
-	// Globally enable interrupts.
-	sei();
+  // Clear the Page Buffer.
+  pageBufferErase();
+  // Set the Global Interrupt Flag.
+  sei();
 }
 
 void bootloaderReset(void) {
-		// Reset the UART registers to their reset state.
-		UBRRH = 0x00;
-		UBRRL = 0x00;
-		UCSRC = 0x06;
-		UCSRB = 0x00;
+  // Clear the Global Interrupt Flag.
+  cli();
 
-		// Globally disable interrupts.
-		cli();
+  // Return all of the registers to their reset state.
+  UCSRB = 0x00;
+  UCSRC = 0x06;
+  UBRRH = 0x00;
+  UBRRL = 0x00;
 }
 
-int main() {
-	while (1) {
-		processBuffer();
-	}
+void processBuffer(void) {
+  u16 page_address;
+  u16 *pointer;
+  u16 checksum;
 
-	return 0;
+  cli();
+  if (received_buffer.message_valid == 0) {
+	sei();
+    return;
+  }
+  if (received_buffer.page_number < APPLICATION_START_PAGE) {
+    // Ignore pages lower than the application start page to protect the bootloader code.
+    //
+    received_buffer.message_valid = 0;
+	sei();
+    return;
+  }
+
+  // Verify the checksum. This is performed over the page number, payload_length and
+  // the data bytes.
+  checksum = 0x0000;
+  checksum = _crc_xmodem_update(checksum, received_buffer.page_number);
+  checksum = _crc_xmodem_update(checksum, received_buffer.payload_length);
+  for (u8 i = 0; i <= received_buffer.payload_length - 1; i++) {
+    checksum = _crc_xmodem_update(checksum, received_buffer.data[i]);
+  }
+  if (checksum != received_buffer.checksum) {
+    // Invalid message. Discard.
+    received_buffer.message_valid = 0;
+	sei();
+    return;
+  }
+
+  if (received_buffer.payload_length == 0) {
+    // A zero length payload indicates the end of the file.
+    received_buffer.message_valid = 0;
+    boot_application_flag = 1;
+	sei();
+    return;
+  }
+
+  // If we've reached this stage, the message is valid and has page data.
+  pointer = (u16*)received_buffer.data;
+  for (u8 i=0;i < received_buffer.payload_length; i+=2) {
+	  pageBufferWrite(*pointer, i);
+	  pointer++;
+  }
+  page_address = received_buffer.page_number << 6;
+  pageWrite(page_address);
+  // Now that the data has been written to memory, mark the message as no longer valid.
+  received_buffer.message_valid = 0x00;
+  sei();
+}
+
+int main(void) {
+  bootloaderInit();
+  while (boot_application_flag == 0) {
+    processBuffer();
+  }
+  // Make sure the last buffer has been processed.
+  processBuffer();
+  bootloaderReset();
+  
+  jumpToApplication(APPLICATION_BOOT_ADDRESS);
+
+  // We should never reach here.
+  return 0;
 }
