@@ -2,25 +2,22 @@
 ### Currently under development
 
 The purpose of this project is to design a bootloader that will support my [ATtiny4313 DMX Slave project](https://github.com/Braz3n/attiny4313-dmx-slave) project. 
-The aim is the bootloader work using the DMX port on the back of the light.
+The aim is the bootloader work using the DMX port on the back of the light. The bootloader communicates at 250,000 baud, simular to the DMX-512 protocol.
 
-The protocol itself is very simple, with only three types of messages, as well as using break characters for synchronisation and an internal "message" for keeping track of the stage.
+Due to the design of the hardware it isn't possible to achieve bi-directional communication, so a preamble byte and checksum are used to help ensure synchronisation and detect transmission errors. The checksum used is the 16-bit XMODEM CRC as defined in _crc_xmodem_update() from \<util/crc16.h\>.
 
-Currently, there isn't any support for responses from the microcontroller (due to the design of the hardware), although there is the potential for some limited communication
-by toggling the output of PD5 as long as the light is in manual control mode. As such, loss of synchronisation between the uploader and the bootloader is a concern.
-
-The use of a checksum is also being considered to ensure there aren't any errors in communication. The need for this is mitigated by the use of a differential protocol however.
-
-Message Byte    | Description
-----------------|--------------
-0x01            | DATA_START (Followed by one byte) Data messages have a single byte which indicates how many bytes follow. These bytes fill a continuous space in memory.
-0x02            | DATA_BYTES This message is never actually transmitted, but rather used as a "state" that the bootloader occupies.
-0x03            | PAGE_NUM (Followed by one byte) Number of the memory page for following data messages to address into.
-0xFF            | EOF (No following bytes) Indicates the file is complete and there is nothing left to be written into memory.
-Break Character | If followed by a zero byte, the light is receiving DMX packets and should boot to the application. Otherwise, the next received byte indicates the next message.
+Index         | Content         | Value     | Description
+--------------|-----------------|-----------|-------------
+0             | Start Sign      | 0xAA      | Indicates the beginning of a new message.
+1             | Page Number     | 0-63      | The page number being updated. Any value below 0x10 will be ignored.
+2             | Payload Length  | 0-64      | The number of bytes in the payload field.
+3 to (n+3)    | Data            | 0-255     | A series of bytes that should be written into memory in little-endian order.
+(n+4) to (n+5)| Checksum        | 0-65535   | 16-bit CRC-XMODEM applied over the page number, payload length and data bytes.
 
 ## Uploader Script
 An uploader script has also been written for Python. This requires a USB-Serial device connected to an RS-485 transciever as well as the application code in the .hex file format.
+
+The following command line flags have yet to be implemented.
 
 Command Line Flag   | Description
 --------------------|--------------
@@ -28,3 +25,7 @@ Command Line Flag   | Description
 -f *hex_file*       | The hex file to upload to the microcontroller.
 -v                  | Print information about the hex file to the terminal (Start/End address and total space used).
 -d                  | Print the entire contents of the hex file to the terminal (Each page on a line in hexadecimal format).
+
+## To-Do List
+- Implement the above command line flags.
+- Implement a method of indicating that an malformed packed was received.
