@@ -12,6 +12,7 @@
 #include <avr/io.h>
 #include <util/crc16.h>
 #include <stdio.h>
+#include "interrupts.h"
 
 // Convenience macros for fixed-length integers.
 #define u8  uint8_t
@@ -29,7 +30,8 @@ extern void pageErase(u16 pageAddress);
 extern void jumpToApplication(u16 applicationAddress);
 
 // Application Start Address.
-#define APPLICATION_BOOT_ADDRESS  0x400
+// Note that this address is in words (16-bit) not bytes.
+#define APPLICATION_BOOT_ADDRESS  0x200
 #define APPLICATION_START_PAGE    0x10
 
 // UART Configuration.
@@ -37,7 +39,7 @@ extern void jumpToApplication(u16 applicationAddress);
 // For a 16MHz clock, use 0x00 and 0x03.
 // For an 8MHz clock, use 0x00 and 0x01.
 #define DMX_BAUD_DIVIDER_HIGH   0x00
-#define DMX_BAUD_DIVIDER_LOW    0x01
+#define DMX_BAUD_DIVIDER_LOW    0x03
 
 #define MESSAGE_PREAMBLE 0xAA
 #define PAGE_BUFFER_LENGTH  64
@@ -71,7 +73,11 @@ typedef struct {
 message_buffer_t received_buffer;
 u8 boot_application_flag = 0;
 
-ISR(USART0_RX_vect) {
+void usart_receive_char(void) {
+  // Check if we've received a new character. If not, return to the main loop.
+  if (!(UCSRA & (1 << RXC))) {
+	  return;
+  }
   static isr_state_t isr_state = PREAMBLE;
   static u8 bytes_received = 0;
   u8 status_register = UCSRA;
@@ -132,8 +138,14 @@ void bootloaderInit(void) {
   UBRRL = DMX_BAUD_DIVIDER_LOW;
   // Set the UART frame format to 8N2.
   UCSRC = (1 << USBS) | (1 << UCSZ0) | (1 << UCSZ1);
-  // Enable the Rx Complete Interrupt, UART Receiver and UART Transmitter.
-  UCSRB = (1 << RXCIE) | (1 << RXEN) | (1 << TXEN);
+  // Enable the UART Receiver.
+  UCSRB = (1 << RXEN);
+
+  // Enable PD5 for UART mode sensing.
+  // If PD5 is high, then the UART receiver is disabled and
+  // we should boot the application immediately.
+  // Since there is no external pullup, we must use the internal pullup.
+  PORTD |= (1 << PORTD5);
 
   // Clear the Page Buffer.
   pageBufferErase();
@@ -150,6 +162,7 @@ void bootloaderReset(void) {
   UCSRC = 0x06;
   UBRRH = 0x00;
   UBRRL = 0x00;
+  PORTD = 0x00;
 }
 
 void processBuffer(void) {
@@ -157,16 +170,13 @@ void processBuffer(void) {
   u16 *pointer;
   u16 checksum;
 
-  cli();
   if (received_buffer.message_valid == 0) {
-	sei();
     return;
   }
   if (received_buffer.page_number < APPLICATION_START_PAGE) {
     // Ignore pages lower than the application start page to protect the bootloader code.
     //
     received_buffer.message_valid = 0;
-	sei();
     return;
   }
 
@@ -181,7 +191,6 @@ void processBuffer(void) {
   if (checksum != received_buffer.checksum) {
     // Invalid message. Discard.
     received_buffer.message_valid = 0;
-	sei();
     return;
   }
 
@@ -189,7 +198,6 @@ void processBuffer(void) {
     // A zero length payload indicates the end of the file.
     received_buffer.message_valid = 0;
     boot_application_flag = 1;
-	sei();
     return;
   }
 
@@ -203,16 +211,15 @@ void processBuffer(void) {
   pageWrite(page_address);
   // Now that the data has been written to memory, mark the message as no longer valid.
   received_buffer.message_valid = 0x00;
-  sei();
 }
 
 int main(void) {
   bootloaderInit();
-  while (boot_application_flag == 0) {
+  // Loop until a the boot_application_flag is set or PIND5 is high (Receiver is disabled).
+  while (boot_application_flag == 0 && !(PIND & (1 << PIND5))) {
+	usart_receive_char();
     processBuffer();
   }
-  // Make sure the last buffer has been processed.
-  processBuffer();
   bootloaderReset();
   
   jumpToApplication(APPLICATION_BOOT_ADDRESS);

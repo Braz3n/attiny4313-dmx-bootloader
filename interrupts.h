@@ -1,0 +1,88 @@
+/*
+ * interrupt.h
+ *
+ * Created: 16/10/2015 9:45:28 p.m.
+ *  Author: Zane
+ */ 
+
+#define JUMP_TO_ISR __asm__("rjmp 0x37E")
+
+ISR(INT0_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(INT1_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER1_CAPT_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER1_COMPA_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER1_OVF_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER0_OVF_vect, ISR_NAKED) {
+  JUMP_TO_ISR;
+}
+
+ISR(USART0_RX_vect, ISR_NAKED) {
+  JUMP_TO_ISR;
+}
+
+ISR(USART0_UDRE_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(USART0_TX_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(ANA_COMP_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(PCINT0_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER1_COMPB_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER0_COMPA_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(TIMER0_COMPB_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(USI_START_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(USI_OVERFLOW_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(EEPROM_Ready_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(WDT_OVERFLOW_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(PCINT1_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
+
+ISR(PCINT2_vect, ISR_NAKED) {
+	JUMP_TO_ISR;
+}
