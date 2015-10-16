@@ -36,4 +36,4 @@ Command Line Flag   | Required | Description
 -p *serial_port*    | Yes      |The serial port to upload the file over.
 -f *hex_file*       | Yes      |The hex file to upload to the microcontroller.
 -d                  | No       |Print information about the hex file to the terminal (Start/End address and total space used).
--h                  | No       |Print the usage information for the scrip.
+-h                  | No       |Print the usage information for the script.
